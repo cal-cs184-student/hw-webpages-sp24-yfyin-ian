@@ -1,7 +1,426 @@
-<html>
-	<head>
-	</head>
-	<body>
-		Homework 4 index.html here
-	</body>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+<style>
+  body {
+    padding: 100px;
+    width: 1000px;
+    margin: auto;
+    text-align: left;
+    font-weight: 300;
+    font-family: 'Open Sans', sans-serif;
+    color: #121212;
+  }
+  h1, h2, h3, h4 {
+    font-family: 'Source Sans Pro', sans-serif;
+  }
+  .centered-code {
+      display: block;
+      margin: 0 auto;
+      text-align: center;
+    }
+</style>
+<title>CS 184 Mesh Editor</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link href="https://fonts.googleapis.com/css?family=Open+Sans|Source+Sans+Pro" rel="stylesheet">
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+</head>
+
+
+<body>
+
+<h1 align="middle">CS 184: Computer Graphics and Imaging, Spring 2024</h1>
+<h1 align="middle">Project 4: Cloth Simulator</h1>
+<h2 align="middle">Yifan Yin</h2>
+
+<br><br>
+
+<div>
+
+<h2 align="middle">Overview</h2>
+<p>In this assignment, we implemented a real-time simulation of cloth using a point mass and spring based system. This is done by using Verlet integration (in Part II), and computing collision of point masses with other primitives in the scene (Part III) and other point masses in the cloth (Part IV). In Part V, we wrote shaders in GLSL.</p>
+
+<h2 align="middle">Part I: Masses and springs</h2>
+<p>
+  <h3>Building point masses</h3>
+  We first calculate the interval of the different point masses 
+  <code class="centered-code"><br>
+    x_interval = width / num_width_points;<br>
+    y_interval = height / num_height_points;
+  </code><br>
+  before placing the grid of masses according to the x and y interval. We use y to iterate through num_height_points, and x to iterate through num_width_points. 
+  If the orientation is horizontal, the calculated position for the point mass is <code class="centered-code"><br>(x * x_interval, 1, y * y_interval)</code><br>
+  Otherwise, the point mass is placed at <code class="centered-code"><br>(x * x_interval, y * y_interval, -0.001 + static_cast&ltdouble&gt(rand()) / RAND_MAX * 0.002)</code> <br>
+  We iterate through <code>pinned</code> using <code>std::find</code> to see whether it contains <code>{x, y}</code>. If it does, we set the point mass's <code>pinned</code> boolean to <code>true</code>, and <code>false</code> otherwise. <br>
+  <h3>Building springs</h3>
+  We iterate through <code>point_masses</code> and find the 2D grid index for every point mass. For each type of string, we compute the 2D index of the other endpoint of the string and check whether it is within the grid. If it does, we add a string of that type between them and place it onto the <code>strings</code> vector. <br>
+</p>
+
+<div align="center">
+  <table>
+    <tr>
+      <td>
+        <img src="Part1_cloth_wireframe.png" width="480px" align="middle">
+        <figcaption align="middle">screenshot of pinned2.json</figcaption>
+      </td>
+    </tr>
+  </table>
+</div>
+<div align="center">
+  <table>
+    <tr>
+      <td>
+        <img src="Part1_without_shear.png" width="300px" align="middle">
+        <figcaption align="middle">without shearing constraints</figcaption>
+      </td>
+      <td>
+        <img src="Part1_only_shearing.png" width="300px" align="middle">
+        <figcaption align="middle">only shearing constraints</figcaption>
+      </td>
+      <td>
+        <img src="Part1_all_constraints.png" width="300px" align="middle">
+        <figcaption align="middle">with all constraints</figcaption>
+      </td>
+    </tr>
+  </table>
+</div>
+
+<br>
+
+<h2 align="middle">Part II: Simulation via numerical integration</h2>
+<h3>Compute total force acting on each point mass</h3>
+<p>
+  We first compute the total external acceleration by adding all elements in <code>external_accelerations</code> before 
+  multiplying it by <code>mass</code> to obtain the total external force. Then we apply this external force to every point mass. <br>
+
+  Next, we iterate through <code>strings</code> and use Hooke's law to compute the tension inside the string. \[F_S = k_s * (||p_a - p_b|| - l)\] For each type of string, we check whether that type of constraint is enabled, and only add the force to the point masses when it is. For bending constraints, we multiply 0.2 to <code>ks</code>.
+
+  <h3>Use Verlet integration to compute new point mass positions</h3>
+  We follow the formula given in the spec when doing position updates to unpinned point masses \[x_{t + dt} = x_t + (1 - d) * (x_t - x_{t-dt}) + a_t * dt^2\] If the point mass is pinned, we do nothing.
+
+  <h3>Constrain position updates</h3>
+  For each spring in <code>springs</code>, we check the distance between the point masses on the two endpoints. If it is larger than <code>1.1 * rest_length</code>, we modify the positions of the points while maintaining the relative direction between them such that the distance between them gets no larger than <code>1.1 * rest_length</code>. If both of them are unpinned, we perform half of the correction to each point mass. If one of them is pinned, we apply the correction to the other.
+
+  <h3>Analysis of different parameters</h3>
+  
+  <h4>Different ks</h4>
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part2_low_ks.png" width="300px" align="middle">
+          <figcaption align="middle">low ks</figcaption>
+        </td>
+        <td>
+          <img src="Part2_default.png" width="300px" align="middle">
+          <figcaption align="middle">default ks</figcaption>
+        </td>
+        <td>
+          <img src="Part2_high_ks.png" width="300px" align="middle">
+          <figcaption align="middle">high ks</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+  We can see that with a low ks, the cloth seems to be looser when it falls down, while with a high ks, the cloth seems to be tighter.
+
+  <h4>Different density</h4>
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part2_low_density.png" width="300px" align="middle">
+          <figcaption align="middle">low density</figcaption>
+        </td>
+        <td>
+          <img src="Part2_default.png" width="300px" align="middle">
+          <figcaption align="middle">default density</figcaption>
+        </td>
+        <td>
+          <img src="Part2_high_density.png" width="300px" align="middle">
+          <figcaption align="middle">high density</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+  With a low density, the cloth is very light and the shape of the cloth is close to a square as the middle of the cloth looks pretty much upright. With a high density, the cloth seems very heavy and the middle of the cloth falls down by more extent while showing more wrinkles.
+
+  <h4>Different damping</h4>
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part2_small_damping.png" width="300px" align="middle">
+          <figcaption align="middle">small damping term</figcaption>
+        </td>
+        <td>
+          <img src="Part2_default.png" width="300px" align="middle">
+          <figcaption align="middle">default damping term</figcaption>
+        </td>
+        <td>
+          <img src="Part2_large_damping.png" width="300px" align="middle">
+          <figcaption align="middle">large damping term</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+  With a small damping term (we choose 0 here), the cloth keeps swinging around without stopping because there is no loss of energy. with a large damping term, the cloth falls down slowly and smoothly.
+
+  <h4>Default state of pinned4.json</h4>
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part2_pinned4.png" width="480px" align="middle">
+        </td>
+      </tr>
+    </table>
+  </div>
+</p>
+
+<br>
+
+<h2 align="middle">Part III: Simulation via numerical integration</h2>
+<p>
+  <h3>Collisions with spheres</h3>
+  We first compute the distance between the point mass and the origin of the sphere. The point mass intersects with or is inside the sphere if the distance is smaller or equal to the radius of the sphere. In this case, we compute the tangent point <code class="centered-code"><br>tangent_point = origin + radius * (pm.position - origin).unit();</code><br> the correction vector <code class="centered-code"><br>correction = tangent_point - pm.last_position;</code><br> and the updated position of the point mass is <code class="centered-code"><br>pm.position = pm.last_position + (1 - friction) * correction</code><br>
+
+  The screenshots of the shaded cloth with different show that a lower ks causes the cloth to looks softer, while with a high ks the cloth tends to be harder to bend.
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part3_sphere_ks500.png" width="300px" align="middle">
+          <figcaption align="middle">ks=500</figcaption>
+        </td>
+        <td>
+          <img src="Part3_sphere_ks5000.png" width="300px" align="middle">
+          <figcaption align="middle">ks=5000</figcaption>
+        </td>
+        <td>
+          <img src="Part3_sphere_ks50000.png" width="300px" align="middle">
+          <figcaption align="middle">ks=50000</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>Collisions with planes</h3>
+  We determine whether a point is above, below or inside a plane by computing the dot product of the normal of the plane and the vector pointing from the point to an arbitrary point on the plane. If the result is 0, then the point is inside the plane. A positive result and a negative result represent for different sides of the plane. <br>
+  In this way, we can tell that the point mass goes across the plane if computed results of its last position and the current position have different signs. If either of them is zero, we also consider the point mass to be crossing over the plane and apply corrections to it. <br>
+  We compute the position of the tangent point using the formula for plane-line intersection: <code class="centered-code"><br>tangent_point = pm.last_position + (pm.position - pm.last_position) * (dot(point - pm.last_position, normal) / dot(pm.position - pm.last_position, normal));</code><br>
+  then we provide it with a small constant <code>SURFACE_OFFSET</code> to move it off the plane, which would be on the same side of the plane that the point mass was before crossing over. <br>
+  Finally, we update the point mass's position by computing the correction, scale it by \(1-f\), and add it to its last position.
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part3_plane.png" width="480px" align="middle">
+        </td>
+      </tr>
+    </table>
+  </div>
+</p>
+
+<br>
+
+<h2 align="middle">Part IV: Handling self-collisions</h2>
+<p>
+  <h3>Compute hash according to position</h3>
+  Given \(w, h, t\) in the spec, we compute the 3D coordinate of a point mass by <code class="centered-code"><br>int x = pos.x / w, y = pos.y / h, z = pos.z / t;</code><br> and use (x, y, z) as the coordinate. We combine them into a integer and use it as the hash by shifting the bits of x and y: <code class="centered-code"><br>float hash = (x << 20) | (y << 10) | z;</code><br>
+
+  <h3>Building spatial map</h3>
+  We iterate through <code>point_masses</code>, and compute the hash of each point mass, then use the hash as the key in the map and add it to the corresponding vector (i.e. <code>*map[hash]</code>). 
+
+  <h3>Self collision</h3>
+  We compute the hash of the point mass, and iterate through <code>*map[hash]</code> to search for candidates that the point mass may collide into. If the distance between two point masses gets smaller than <code>2 * thickness</code>, we compute a correction vector <code>(2 * thickness - dist) * (pm.position - candidate->position).unit()</code> and store it. After the iteration finishes, we take the average of the correction vectors and scale it down by <code>simulation_steps</code> to derive the final correction.
+
+  <h3>Results</h3>
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part4_early.png" width="300px" align="middle">
+          <figcaption align="middle">early state</figcaption>
+        </td>
+        <td>
+          <img src="Part4_middle.png" width="300px" align="middle">
+          <figcaption align="middle">---------------------></figcaption>
+        </td>
+        <td>
+          <img src="Part4_restful.png" width="300px" align="middle">
+          <figcaption align="middle">restful state</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>Analysis</h3>
+  With a low density, there are less folds when the cloth falls down, and the folds are more distant to each other. 
+  With a high density, there are many folds which are really close to each other.
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part4_density_1.png" width="300px" align="middle">
+          <figcaption align="middle">density=1</figcaption>
+        </td>
+        <td>
+          <img src="Part4_density_15.png" width="300px" align="middle">
+          <figcaption align="middle">density=15</figcaption>
+        </td>
+        <td>
+          <img src="Part4_density_100.png" width="300px" align="middle">
+          <figcaption align="middle">density=100</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  A small ks is really similar to a high density, with many folds close to each other in the image.
+  A large ks shows similar results as a low density, with less folds and the cloth seems harder to bend.
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part4_ks_500.png" width="300px" align="middle">
+          <figcaption align="middle">ks=500</figcaption>
+        </td>
+        <td>
+          <img src="Part4_ks_5000.png" width="300px" align="middle">
+          <figcaption align="middle">ks=5000</figcaption>
+        </td>
+        <td>
+          <img src="Part4_ks_50000.png" width="300px" align="middle">
+          <figcaption align="middle">ks=50000</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+</p>
+
+<h2>Part V: Cloth Sim</h2>
+<p>
+  <h3>Shader Programs</h3>
+  Shaders are isolated programs that run in parallel on GPU that can execute sections of the graphics pipeline.
+  A shader program takes in inputs and output a single 4 dimensional vector. <br>
+  A vertex shader modify properties of vertices. It involves modifying their position vectors, normal vectors, as well as their uv coordinates in the texture, which are the inputs for the fragment shader. It can also write the position of a vertex to <code>gl_Position</code>.  <br>
+  A fragment shader takes in the outputs of the vertex shader, which are the geometric attributes of the fragment, to compute and write a color into the output.
+
+  <h3>Blinn-Phong shading model</h3>
+  The Blinn-Phong shading model consists of three components: amibient lighting, diffuse reflection and specular highlights. Ambient shading is the shading that does not depend on anything. It adds a constant color to account for disregarded illumination and fill in black shadows. Diffuse reflection scatters light uniformly in all directions. The result of specular shading depends on view direction. More light are reflected near mirror reflection direction. <br>
+
+  For the selection of parameters, we use \[k_a = 0.01, Ia = vec3(1, 1, 1), k_d = 1, ks = 0.5, p = 32\]
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part5_Phong_ambient.png" width="300px" align="middle">
+          <figcaption align="middle">Ambient</figcaption>
+        </td>
+        <td>
+          <img src="Part5_Phong_diffuse.png" width="300px" align="middle">
+          <figcaption align="middle">Diffuse</figcaption>
+        </td>
+        <td>
+          <img src="Part5_Phong_specular.png" width="300px" align="middle">
+          <figcaption align="middle">Specular</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part5_Phong_full_lighting.png.png" width="480px" align="middle">
+          <figcaption align="middle">Full shading model</figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>Texture mapping</h3>
+  The texture shader uses the color sampled from the texture at the texture space coordinate <code>uv</code> as the output color. We use <code>texture_4.png</code> as the texture.
+
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part5_texture.png" width="480px" align="middle">
+          <figcaption align="middle"></figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>Bump mapping and displacement mapping</h3>
+  In bump mapping, we modify the normal vectors of an object so that the fragment shader gives the illusion of detail (such as bumps) on an object.
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part5_bump.png" width="400px" align="middle">
+        </td>
+        <td>
+          <img src="Part5_bump2.png" width="400px" align="middle">
+        </td>
+      </tr>
+    </table>
+  </div>
+  In displacement mapping, we modify the position of vertices to reflect the height map in addition to modifying the normals to be consistent with the new geometry.
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part5_displacement.png" width="480px" align="middle">
+          <figcaption align="middle"></figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  By changing the sphere mesh's coarseness, we can see that there are basically no changes to bump mapping. For displacement mapping, with a higher resolution, the sphere looks rounder and more similar to its original shape.
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part5_bump_16.png" width="400px" align="middle">
+          <figcaption align="middle">bump mapping with <code>-o 16 -a 16</code></figcaption>
+        </td>
+        <td>
+          <img src="Part5_displacement_16.png" width="400px" align="middle">
+          <figcaption align="middle">displacement mapping with <code>-o 16 -a 16</code></figcaption>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <img src="Part5_bump_128.png" width="400px" align="middle">
+          <figcaption align="middle">bump mapping with <code>-o 128 -a 128</code></figcaption>
+        </td>
+        <td>
+          <img src="Part5_displacement_128.png" width="400px" align="middle">
+          <figcaption align="middle">displacement mapping with <code>-o 128 -a 128</code></figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>Environment-mapped Reflections</h3>
+  In the mirror shader, we take the incoming eye-ray, reflect it across the surface normal to get the outgoing direction, and then sample the environment for that direction's incoming radiance.
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <img src="Part5_mirror.png" width="480px" align="middle">
+          <figcaption align="middle"></figcaption>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+</p>
+
+</body>
 </html>
